@@ -48,6 +48,7 @@ public abstract class BaseChargingDemo {
     static final String QUEUE_LAG = "QUEUE_LAG";
     private static final String ADD_CREDIT = "ADD_CREDIT";
     public static SafeHistogramCache shc = SafeHistogramCache.getInstance();
+    protected static int oracleVersion = 19;
 
     /**
      * Print a formatted message.
@@ -88,11 +89,15 @@ public abstract class BaseChargingDemo {
         if (service == null) {
             service = "FREEPDB1";
         }
+        String version = System.getenv("ORA_VERSION");
+        if (version != null && version.equals("21")) {
+            oracleVersion = 21;
+        }
 
         final String connectString = "jdbc:oracle:thin:@//" + host + ":1521/" + service;
 
         try {
-            msg("Logging into Oracle Database");
+            msg("Logging into Oracle Database (version mode: " + oracleVersion + ")");
 
             Connection connection = DriverManager.getConnection(connectString, user, password);
             connection.setAutoCommit(false);
