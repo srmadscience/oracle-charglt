@@ -45,14 +45,26 @@ sqlplus charglt/charglt@//host:1521/service @ddl/oracle_21c_create_db.sql
 
 ### 3. Create the stored procedures
 
-**Oracle 19c (default):**
+Choose the commit mode that matches your durability requirements (see [Commit mode](#commit-mode)):
+
+**Oracle 19c, full ACID commits:**
 ```
-sqlplus charglt/charglt@//host:1521/service @ddl/oracle_create_procs.sql
+sqlplus charglt/charglt@//host:1521/service @ddl/oracle_create_procs_normal.sql
 ```
 
-**Oracle 21c+:**
+**Oracle 19c, fast non-synchronous commits:**
 ```
-sqlplus charglt/charglt@//host:1521/service @ddl/oracle_21c_create_procs.sql
+sqlplus charglt/charglt@//host:1521/service @ddl/oracle_create_procs_fast.sql
+```
+
+**Oracle 21c+, full ACID commits:**
+```
+sqlplus charglt/charglt@//host:1521/service @ddl/oracle_21c_create_procs_normal.sql
+```
+
+**Oracle 21c+, fast non-synchronous commits:**
+```
+sqlplus charglt/charglt@//host:1521/service @ddl/oracle_21c_create_procs_fast.sql
 ```
 
 ### 4. Optionally replace the Kafka stub
@@ -85,10 +97,21 @@ Two DDL paths are provided. The stored procedure interface is identical in both 
 
 | `ORA_VERSION` | DDL files | `user_json_object` type | `user_json_cardid` |
 |---|---|---|---|
-| `19` (default) | `oracle_create_db.sql` + `oracle_create_procs.sql` | `CLOB IS JSON` | Regular column, maintained by stored procedures |
-| `21` | `oracle_21c_create_db.sql` + `oracle_21c_create_procs.sql` | Native `JSON` type | Virtual generated column (automatic) |
+| `19` (default) | `oracle_create_db.sql` + `oracle_create_procs_normal.sql` or `oracle_create_procs_fast.sql` | `CLOB IS JSON` | Regular column, maintained by stored procedures |
+| `21` | `oracle_21c_create_db.sql` + `oracle_21c_create_procs_normal.sql` or `oracle_21c_create_procs_fast.sql` | Native `JSON` type | Virtual generated column (automatic) |
 
 The `oracle_remove_db.sql` cleanup script works for both versions.
+
+## Commit mode
+
+Each DML stored procedure (`DelUser`, `GetAndLockUser`, `UpdateLockedUser`, `UpsertUser`, `AddCredit`, `ReportQuotaUsage`) issues a commit at the end of every successful write path. Two variants are provided:
+
+| File suffix | Commit statement | Behaviour |
+|---|---|---|
+| `_normal` | `COMMIT;` | Full ACID — redo written synchronously to disk before returning |
+| `_fast` | `COMMIT WRITE BATCH NOWAIT;` | Higher throughput — redo batched and written asynchronously; individual transaction durability is not guaranteed on crash |
+
+Use `_normal` for production workloads where data loss is unacceptable. Use `_fast` for benchmarking or workloads that tolerate losing the last few transactions after a crash.
 
 ## Running the benchmark
 

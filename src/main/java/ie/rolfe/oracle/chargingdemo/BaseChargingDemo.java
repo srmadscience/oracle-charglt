@@ -87,7 +87,7 @@ public abstract class BaseChargingDemo {
         }
         String service = System.getenv("ORA_SERVICE");
         if (service == null) {
-            service = "FREEPDB1";
+            service = "MYPDB";
         }
         String version = System.getenv("ORA_VERSION");
         if (version != null && version.equals("21")) {
@@ -162,7 +162,7 @@ public abstract class BaseChargingDemo {
                 cs.setLong(1, i);
                 cs.execute();
 
-                if (i % 100000 == 1) {
+                if (i % 100 == 1) {
                     msg("Deleted " + i + " users...");
                     mainConnection.commit();
                 }

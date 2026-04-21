@@ -1,16 +1,19 @@
--- Oracle PL/SQL stored procedures.
--- Run connected as the charglt user after running oracle_create_db.sql.
+-- Oracle 21c+ PL/SQL stored procedures — fast commit mode.
+-- Run connected as the charglt user after running oracle_21c_create_db.sql.
 -- Each block must be terminated with '/' on a line by itself.
 --
--- Key differences from PostgreSQL PL/pgSQL:
---   - RETURNS TABLE(...)    -> OUT SYS_REFCURSOR (for multi-row) or OUT NUMBER/VARCHAR2 (for status)
---   - CLOCK_TIMESTAMP()     -> SYSTIMESTAMP
---   - INTERVAL '1 second'   -> INTERVAL '1' SECOND
---   - jsonb_set(...)        -> JSON_MERGEPATCH(...)
---   - SELECT INTO raises NO_DATA_FOUND on 0 rows (must be caught)
---   - PERFORM func(...)     -> func(...);
---   - p_json::JSONB         -> p_json  (VARCHAR2 auto-coerced to CLOB)
---   - user_json_cardid is a regular column; must be updated explicitly
+-- Each DML procedure issues COMMIT WRITE BATCH NOWAIT; before returning.
+-- This is faster than COMMIT; but not fully synchronous (redo not flushed to disk
+-- before control returns). Use only when durability of individual transactions
+-- can be sacrificed for throughput.
+-- For full ACID commits use oracle_21c_create_procs_normal.sql instead.
+-- For Oracle 19c use oracle_create_procs_normal.sql / oracle_create_procs_fast.sql.
+--
+-- Differences from oracle_create_procs_fast.sql (19c):
+--   - UpsertUser: user_json_cardid removed from UPDATE and INSERT
+--     (virtual generated column maintains it automatically)
+--   - UpdateLockedUser: user_json_cardid removed from UPDATE;
+--     JSON_TRANSFORM used instead of JSON_MERGEPATCH for the delta path
 
 
 CREATE OR REPLACE PROCEDURE SendToKafka(
@@ -28,6 +31,7 @@ BEGIN
   DELETE FROM user_recent_transactions WHERE userid = p_userid;
   DELETE FROM user_usage_table         WHERE userid = p_userid;
   DELETE FROM user_table               WHERE userid = p_userid;
+  COMMIT WRITE BATCH NOWAIT;
 END DelUser;
 /
 
@@ -62,6 +66,7 @@ BEGIN
     SET user_softlock_sessionid = p_new_lock_id,
         user_softlock_expiry    = SYSTIMESTAMP + INTERVAL '1' SECOND
     WHERE userid = p_userid;
+    COMMIT WRITE BATCH NOWAIT;
     p_status_byte   := 54;
     p_status_string := 'User ' || p_userid || ' locked by session ' || l_user_softlock_sessionid;
   ELSE
@@ -104,18 +109,17 @@ BEGIN
       UPDATE user_table
       SET user_softlock_sessionid = NULL,
           user_softlock_expiry    = NULL,
-          user_json_object        = JSON_MERGEPATCH(NVL(user_json_object, '{}'),
-                                      '{"loyaltySchemeNumber":' || TO_NUMBER(p_json_payload) || '}'),
-          user_json_cardid        = TO_NUMBER(p_json_payload)
+          user_json_object        = JSON_TRANSFORM(NVL(user_json_object, '{}'),
+                                      SET '$.loyaltySchemeNumber' = TO_NUMBER(p_json_payload))
       WHERE userid = p_userid;
     ELSE
       UPDATE user_table
       SET user_softlock_sessionid = NULL,
           user_softlock_expiry    = NULL,
-          user_json_object        = p_json_payload,
-          user_json_cardid        = TO_NUMBER(JSON_VALUE(p_json_payload, '$.loyaltySchemeNumber'))
+          user_json_object        = p_json_payload
       WHERE userid = p_userid;
     END IF;
+    COMMIT WRITE BATCH NOWAIT;
     p_status_byte   := 42;
     p_status_string := 'User ' || p_userid || ' updated';
   ELSE
@@ -160,7 +164,6 @@ BEGIN
     IF l_found_userid IS NOT NULL THEN
       UPDATE user_table
       SET user_json_object        = p_json,
-          user_json_cardid        = TO_NUMBER(JSON_VALUE(p_json, '$.loyaltySchemeNumber')),
           user_last_seen          = p_lastSeen,
           user_balance            = p_addBalance,
           user_softlock_expiry    = NULL,
@@ -168,10 +171,8 @@ BEGIN
       WHERE userid = p_userid;
       p_status_string := 'User ' || p_userid || ' updated';
     ELSE
-      INSERT INTO user_table (userid, user_json_object, user_json_cardid, user_last_seen, user_balance)
-      VALUES (p_userid, p_json,
-              TO_NUMBER(JSON_VALUE(p_json, '$.loyaltySchemeNumber')),
-              p_lastSeen, p_addBalance);
+      INSERT INTO user_table (userid, user_json_object, user_last_seen, user_balance)
+      VALUES (p_userid, p_json, p_lastSeen, p_addBalance);
       p_status_string := 'User ' || p_userid || ' inserted';
     END IF;
     p_status_byte := 42;
@@ -179,6 +180,7 @@ BEGIN
       (userid, user_txn_id, txn_time, approved_amount, spent_amount, purpose)
     VALUES (p_userid, p_txnId, p_lastSeen, 0, p_addBalance, 'Create User');
     SendToKafka(p_userid, p_txnId);
+    COMMIT WRITE BATCH NOWAIT;
   END IF;
 END UpsertUser;
 /
@@ -227,6 +229,7 @@ BEGIN
       WHERE userid = p_userid
         AND txn_time < SYSTIMESTAMP - INTERVAL '1' SECOND;
 
+      COMMIT WRITE BATCH NOWAIT;
       p_status_byte   := 56;
       p_status_string := p_extra_credit || ' added by Txn ' || p_txnId;
     ELSE
@@ -321,6 +324,8 @@ BEGIN
       DELETE FROM user_recent_transactions
       WHERE userid = p_userid
         AND txn_time < SYSTIMESTAMP - INTERVAL '1' SECOND;
+
+      COMMIT WRITE BATCH NOWAIT;
     ELSE
       p_status_byte   := 50;
       p_status_string := 'User ' || p_userid || ' does not exist';
@@ -336,9 +341,9 @@ CREATE OR REPLACE PROCEDURE GetUser(
 ) IS
 BEGIN
   OPEN p_cursor FOR
-    SELECT userid FROM user_table            WHERE userid = p_userid
+    SELECT userid FROM user_table               WHERE userid = p_userid
     UNION ALL
-    SELECT userid FROM user_usage_table      WHERE userid = p_userid
+    SELECT userid FROM user_usage_table         WHERE userid = p_userid
     UNION ALL
     SELECT userid FROM user_recent_transactions WHERE userid = p_userid;
 END GetUser;
