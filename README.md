@@ -7,6 +7,7 @@ Far more documentation about the benchmark itself is available at the link above
 
 ## See Also:
 
+* [aerospike-charglt](https://github.com/srmadscience/aerospike-charglt)
 * [postgres-charglt](https://github.com/srmadscience/postgres-charglt)
 * [mongodb-charglt](https://github.com/srmadscience/mongodb-charglt)
 * [redis-charglt](https://github.com/srmadscience/redis-charglt)
